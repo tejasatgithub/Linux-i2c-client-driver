@@ -87,6 +87,89 @@ static void i2c_cpld_remove_client(struct i2c_client *client)
     mutex_unlock(&list_lock);
 }
 
+// Read and Write API for I2C access
+int cpld_i2c_read(struct cpld_data *data, u8 reg)
+{
+    int ret = -EPERM;
+    u8 high_reg =0x00;
+
+    mutex_lock(&list_lock);
+    ret = i2c_smbus_write_byte_data(data->client, high_reg,reg);
+    ret = i2c_smbus_read_byte(data->client);
+    mutex_unlock(&list_lock);
+
+    return ret;
+}
+
+int cpld_i2c_write(struct cpld_data *data,u8 reg, u8 value)
+{
+    int ret = -EIO;
+    u16 devdata=0;
+    u8 high_reg =0x00;
+
+    mutex_lock(&list_lock);
+    devdata = (value << 8) | reg;
+    i2c_smbus_write_word_data(data->client,high_reg,devdata);
+    mutex_unlock(&list_lock);
+
+    return ret;
+}
+
+static ssize_t get_lpmode(struct device *dev, struct device_attribute *devattr, char *buf) 
+{
+    int ret;
+    u16 devdata=0;
+    struct cpld_data *data = dev_get_drvdata(dev);
+
+    ret = cpld_i2c_read(data,QSFP_LPMODE_REG0);
+    if(ret < 0)
+        return sprintf(buf, "read error");
+    devdata = (u16)ret & 0xff;
+
+    ret = cpld_i2c_read(data,QSFP_LPMODE_REG1);
+    if(ret < 0)
+        return sprintf(buf, "read error");
+    devdata |= (u16)(ret & 0xff) << 8;
+
+    return sprintf(buf,"0x%04x\n",devdata);
+}
+
+static ssize_t get_reset(struct device *dev, struct device_attribute *devattr, char *buf) 
+{
+    int ret;
+    u16 devdata=0;
+    struct cpld_data *data = dev_get_drvdata(dev);
+
+    ret = cpld_i2c_read(data,QSFP_RST_CRTL_REG0);
+    if(ret < 0)
+        return sprintf(buf, "read error");
+    devdata = (u16)ret & 0xff;
+
+    ret = cpld_i2c_read(data,QSFP_RST_CRTL_REG1);
+    if(ret < 0)
+        return sprintf(buf, "read error");
+    devdata |= (u16)(ret & 0xff) << 8;
+
+    return sprintf(buf,"0x%04x\n",devdata);
+}
+
+// Device attributes defined
+// User may read low power mode of the XCVR
+// As well read reset state of the XCVR
+static DEVICE_ATTR(qsfp_lpmode, S_IRUGO,get_lpmode,NULL);
+static DEVICE_ATTR(qsfp_reset,  S_IRUGO,get_reset,NULL);
+
+static struct attribute *i2c_cpld_attrs[] = {
+    &dev_attr_qsfp_lpmode.attr,
+    &dev_attr_qsfp_reset.attr,
+    NULL,
+};
+
+static struct attribute_group i2c_cpld_attr_grp = {
+    .attrs = i2c_cpld_attrs,
+};
+
+
 static int i2c_cpld_probe(struct i2c_client *client,
         const struct i2c_device_id *dev_id)
 {
@@ -103,7 +186,12 @@ static int i2c_cpld_probe(struct i2c_client *client,
     // adding to list here
     i2c_cpld_add_client(client);
 
-    /* TODO -- Register sysfs hooks */
+    /* Register sysfs hooks */
+    status = sysfs_create_group(&client->dev.kobj, &i2c_cpld_attr_grp);
+    if (status) {
+        printk(KERN_INFO "Cannot create sysfs\n");
+    }
+
     return 0;
 
 exit:
