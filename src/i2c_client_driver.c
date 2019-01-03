@@ -37,14 +37,18 @@ are enumerated.
 #define  QSFP_MOD_PRS_REG0 0x16 
 #define  QSFP_MOD_PRS_REG1 0x17 
 
-//TODO:: Enhancement -- support probing of multiple client devices
+// Support probing of multiple client devices
 // and store them into list.
+static LIST_HEAD(cpld_client_list);
+static struct mutex  list_lock;
 
 // Stores probed CPLD device data
 struct cpld_data {
     struct i2c_client *client;
+    struct list_head list;
 };
 
+static const unsigned short normal_i2c[] = { 0x3e, I2C_CLIENT_END };
 
 static void i2c_cpld_add_client(struct i2c_client *client)
 {
@@ -56,13 +60,31 @@ static void i2c_cpld_add_client(struct i2c_client *client)
     }
     data->client = client;
     i2c_set_clientdata(client, data);
+    mutex_lock(&list_lock);
+    list_add(&data->list,&cpld_client_list);
+    mutex_unlock(&list_lock);
 }
 
 static void i2c_cpld_remove_client(struct i2c_client *client)
 {
-    struct cpld_data *data = i2c_get_clientdata(client);
-    kfree(data);
-    return;
+    struct list_head *list_node = NULL;
+    struct cpld_data *data = NULL;
+    int found = 0;
+
+    mutex_lock(&list_lock);
+    list_for_each(list_node, &cpld_client_list)
+    {
+        data = list_entry(list_node,struct cpld_data, list);
+        if(data->client == client) {
+            found = 1;
+            break;
+        }
+    }
+    if(found) {
+        list_del(list_node);
+        kfree(data);
+    }
+    mutex_unlock(&list_lock);
 }
 
 static int i2c_cpld_probe(struct i2c_client *client,
@@ -70,7 +92,7 @@ static int i2c_cpld_probe(struct i2c_client *client,
 {
     int status;
 
-  	// Check for platform i2c device capabilities here
+    // Check for platform i2c device capabilities here
     if (!i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_BYTE_DATA)) {
         dev_dbg(&client->dev, "i2c_check_functionality failed (0x%x)\n", client->addr);
         status = -EIO;
@@ -78,7 +100,7 @@ static int i2c_cpld_probe(struct i2c_client *client,
     }
 
     dev_info(&client->dev, "chip probed - adding to client store\n");
-	  // adding to list here
+    // adding to list here
     i2c_cpld_add_client(client);
 
     /* TODO -- Register sysfs hooks */
@@ -107,6 +129,7 @@ static struct i2c_driver i2c_cpld_driver = {
     .probe        = i2c_cpld_probe,
     .remove       = i2c_cpld_remove,
     .id_table     = i2c_cpld_id,
+    .address_list = normal_i2c,
 };
 
 static int __init i2c_cpld_init(void)
